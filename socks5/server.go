@@ -43,11 +43,12 @@
 //
 // # Access control
 //
-// The single [Config.AllowPrivateDestinations] flag governs whether CONNECT
-// requests to private, loopback, and link-local addresses are permitted.
-// When false (default), such connections receive reply 0x02 (not allowed),
-// protecting against SSRF attacks in internet-facing deployments.
-// Set true only when the proxy intentionally serves internal infrastructure.
+// [Config.AllowPrivateDestinations] governs whether CONNECT requests to
+// private, loopback, and link-local addresses are permitted. When nil
+// (default), all such connections receive reply 0x02 (not allowed),
+// protecting against SSRF attacks. The callback receives the authenticated
+// identity (username for RFC 1929, empty string for NoAuth) and returns
+// true to permit private destinations for that user.
 //
 // # Extension points
 //
@@ -89,8 +90,8 @@ const (
 //
 // A zero-value Config starts a proxy that requires no authentication and
 // blocks CONNECT to private, loopback, and link-local IP destinations
-// ([AllowPrivateDestinations] defaults to false). Set [AllowPrivateDestinations]
-// to true for deployments that intentionally proxy to internal infrastructure.
+// ([AllowPrivateDestinations] defaults to nil). Set [AllowPrivateDestinations]
+// to permit specific users to reach internal infrastructure.
 type Config struct {
 	// Logger receives all server-level and session-level log output.
 	// Defaults to [slog.Default] when nil.
@@ -106,19 +107,21 @@ type Config struct {
 	// Leave nil (or empty) to accept unauthenticated connections.
 	Authenticators []Authenticator
 
-	// AllowPrivateDestinations permits CONNECT requests to private, loopback,
-	// and link-local IP addresses (RFC 1918, 127.0.0.0/8, 169.254.0.0/16,
-	// fc00::/7, fe80::/10, etc.).
+	// AllowPrivateDestinations controls whether CONNECT requests to private,
+	// loopback, and link-local IP addresses (RFC 1918, 127.0.0.0/8,
+	// 169.254.0.0/16, fc00::/7, fe80::/10, etc.) are permitted.
 	//
-	// When false (default), such connections are rejected with reply 0x02
-	// (not allowed), protecting internet-facing proxies against SSRF attacks.
-	// Set true only when the proxy intentionally serves internal infrastructure
-	// where private destinations are valid targets.
+	// The callback receives the authenticated identity (username for RFC 1929,
+	// empty string for NoAuth) and returns true to allow the connection.
 	//
-	// Note: DOMAINNAME destinations (ATYP 0x03) are not filtered by this flag
-	// because DNS resolution has not yet occurred at request time. Use a
-	// validating [DialFunc] to protect against DNS-based SSRF.
-	AllowPrivateDestinations bool
+	// When nil (default), all private-destination connections are rejected
+	// with reply 0x02 (not allowed), protecting internet-facing proxies
+	// against SSRF attacks.
+	//
+	// Note: DOMAINNAME destinations (ATYP 0x03) are not filtered by this
+	// callback because DNS resolution has not yet occurred at request time.
+	// Use a validating [DialFunc] to protect against DNS-based SSRF.
+	AllowPrivateDestinations func(identity string) bool
 
 	// Resolver resolves domain names for the UDP ASSOCIATE relay path.
 	// TCP CONNECT lets [Dial] handle DNS internally.

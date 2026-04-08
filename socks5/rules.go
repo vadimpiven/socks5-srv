@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 // rules.go retains the protocol-level types [AddrSpec] and [Command].
-// The rule-set system was removed in favour of the single
-// [Config.AllowPrivateDestinations] flag: the only meaningful policy
+// The rule-set system was removed in favour of the per-identity
+// [Config.AllowPrivateDestinations] callback: the only meaningful policy
 // distinction for a SOCKS5 proxy is whether private/internal destinations
-// are reachable, which is a deployment characteristic, not per-request logic.
+// are reachable, which can vary per authenticated user.
 package socks5
 
 import (

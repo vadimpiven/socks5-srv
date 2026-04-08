@@ -10,7 +10,7 @@ A lightweight, embeddable SOCKS5 proxy server written in Go, implementing
 | Commands            | `CONNECT` (TCP tunnel), `UDP ASSOCIATE` (datagram relay) |
 | Auth methods        | No-auth (0x00), username/password (0x02)                 |
 | Address families    | IPv4, IPv6, domain names                                 |
-| Trusted-IP bypass   | Skip auth for known source IPs                           |
+| Per-user policy     | Private-destination access controlled per user           |
 | Concurrency limit   | Configurable max simultaneous connections (default 1024) |
 | Graceful shutdown   | Drains active sessions before exiting                    |
 
@@ -30,40 +30,39 @@ go build -o socks5-srv .
 
 ## Usage
 
-```
-socks5-srv [flags]
+```text
+socks5-srv -config <file> [flags]
 
-  -addr   string   listen address (default ":1080")
-  -user   string   username for authentication
-  -pass   string   password for authentication (must pair with -user)
-  -bind   string   local IP to bind outgoing connections to
-  -allow  string   comma-separated IPs that bypass authentication
-  -private         allow connections to private/loopback destinations
-  -quiet           suppress informational log output
+  -config   string   NDJSON file with user entries (required)
+  -addr     string   listen address (default ":1080")
+  -bind     string   local IP to bind outgoing connections to
+  -quiet             suppress informational log output
 ```
 
-### Open proxy (no auth)
+### Config file format (NDJSON — one JSON object per line)
+
+```jsonl
+{"id": "alice", "login": "alice", "password": "s3cr3t", "private": true}
+{"id": "bob",   "login": "bob",   "password": "hunter2", "private": false}
+```
+
+| Field      | Description                                              |
+| ---------- | -------------------------------------------------------- |
+| `id`       | Human-readable name (for the operator's convenience)     |
+| `login`    | SOCKS5 authentication username                           |
+| `password` | SOCKS5 authentication password                           |
+| `private`  | Allow connections to private/loopback destinations       |
+
+### Basic usage
 
 ```sh
-./socks5-srv -addr :1080
-```
-
-### Username/password auth
-
-```sh
-./socks5-srv -addr :1080 -user alice -pass s3cr3t
+./socks5-srv -config users.jsonl
 ```
 
 ### Restrict outbound to a specific network interface
 
 ```sh
-./socks5-srv -addr :1080 -bind 203.0.113.1
-```
-
-### Trusted IPs bypass auth; all others must authenticate
-
-```sh
-./socks5-srv -addr :1080 -user alice -pass s3cr3t -allow 10.0.0.1,10.0.0.2
+./socks5-srv -config users.jsonl -bind 203.0.113.1
 ```
 
 ## Embedding
@@ -108,12 +107,12 @@ socks5.Config{
 ### Private-destination policy
 
 By default, CONNECT to private, loopback, and link-local addresses is blocked
-(SSRF protection). Pass `AllowPrivateDestinations: true` for deployments that
-intentionally proxy to internal infrastructure:
+(SSRF protection). Set `AllowPrivateDestinations` to permit specific users
+(or all users) to reach internal infrastructure:
 
 ```go
 socks5.Config{
-    AllowPrivateDestinations: true,
+    AllowPrivateDestinations: func(identity string) bool { return true },
 }
 ```
 

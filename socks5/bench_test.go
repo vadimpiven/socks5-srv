@@ -47,7 +47,7 @@ func BenchmarkRelay(b *testing.B) {
 func BenchmarkHandshake_NoAuth(b *testing.B) {
 	echo := startEchoServer(b)
 	defer echo.Close()
-	proxyAddr, cancel := startProxy(b, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(b, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	echoTCP := echo.Addr().(*net.TCPAddr)
@@ -70,7 +70,7 @@ func BenchmarkHandshake_UserPass(b *testing.B) {
 	defer echo.Close()
 	proxyAddr, cancel := startProxy(b, Config{
 		Authenticators:           []Authenticator{UserPassAuth("bench", "bench")},
-		AllowPrivateDestinations: true,
+		AllowPrivateDestinations: func(string) bool { return true },
 	})
 	defer cancel()
 

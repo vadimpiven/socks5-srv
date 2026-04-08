@@ -21,10 +21,11 @@ import (
 
 // session holds the state for one accepted client connection.
 type session struct {
-	conn net.Conn
-	srv  *Server
-	log  *slog.Logger   // pre-populated with "client" attribute; created once in newSession
-	ap   netip.AddrPort // client's TCP address; .Addr() is already Unmap'd
+	conn     net.Conn
+	srv      *Server
+	log      *slog.Logger   // pre-populated with "client" attribute; created once in newSession
+	ap       netip.AddrPort // client's TCP address; .Addr() is already Unmap'd
+	identity string         // authenticated user (username for RFC 1929, "" for NoAuth)
 }
 
 // newSession constructs a session, extracting the client address once and
@@ -72,11 +73,13 @@ func (s *session) handle(ctx context.Context) {
 	// case the next I/O call will surface the error. Safe to ignore here.
 	_ = s.conn.SetDeadline(time.Now().Add(s.srv.timeouts.handshake))
 
-	if err := s.negotiateAuth(); err != nil {
+	identity, err := s.negotiateAuth()
+	if err != nil {
 		s.log.Info("auth failed", "err", err)
 		gracefulClose(s.conn)
 		return
 	}
+	s.identity = identity
 
 	cmd, dest, err := s.readRequest()
 	if err != nil {
@@ -86,12 +89,13 @@ func (s *session) handle(ctx context.Context) {
 	}
 
 	// Block CONNECT to private/loopback/link-local destinations unless the
-	// operator explicitly permits it. The check applies only to CONNECT:
-	// UDP ASSOCIATE's DST.ADDR is a client source-address hint (RFC 1928 §7),
-	// not a forwarding target. Domain destinations are passed through because
-	// DNS has not yet resolved at this point.
-	if cmd == CommandConnect && !s.srv.cfg.AllowPrivateDestinations {
-		if dest.IP.IsValid() && isPrivateAddr(dest.IP) {
+	// AllowPrivateDestinations callback permits it for this user. The check
+	// applies only to CONNECT: UDP ASSOCIATE's DST.ADDR is a client
+	// source-address hint (RFC 1928 §7), not a forwarding target. Domain
+	// destinations are passed through because DNS has not yet resolved.
+	if cmd == CommandConnect && dest.IP.IsValid() && isPrivateAddr(dest.IP) {
+		allow := s.srv.cfg.AllowPrivateDestinations
+		if allow == nil || !allow(s.identity) {
 			_ = writeReply(s.conn, replyNotAllowed, AddrSpec{})
 			s.log.Info("request denied: private destination", "target", dest)
 			gracefulClose(s.conn)
@@ -124,23 +128,23 @@ func (s *session) handle(ctx context.Context) {
 //
 // Wire format — greeting:  VER(1) | NMETHODS(1) | METHODS(1-255)
 // Wire format — selection: VER(1) | METHOD(1)
-func (s *session) negotiateAuth() error {
+func (s *session) negotiateAuth() (string, error) {
 	var hdr [2]byte
 	if _, err := io.ReadFull(s.conn, hdr[:]); err != nil {
-		return fmt.Errorf("read greeting: %w", err)
+		return "", fmt.Errorf("read greeting: %w", err)
 	}
 	if hdr[0] != version5 {
-		return fmt.Errorf("unsupported SOCKS version: %#x", hdr[0])
+		return "", fmt.Errorf("unsupported SOCKS version: %#x", hdr[0])
 	}
 	if hdr[1] == 0 {
 		// RFC 1928 §3: NMETHODS must be 1-255.
 		_, _ = s.conn.Write([]byte{version5, methodNoAcceptable})
-		return errors.New("NMETHODS is 0: client offered no methods (RFC 1928 §3)")
+		return "", errors.New("NMETHODS is 0: client offered no methods (RFC 1928 §3)")
 	}
 
 	methods := make([]byte, hdr[1])
 	if _, err := io.ReadFull(s.conn, methods); err != nil {
-		return fmt.Errorf("read methods: %w", err)
+		return "", fmt.Errorf("read methods: %w", err)
 	}
 
 	// Trusted clients bypass credential-requiring authenticators: offer
@@ -160,21 +164,21 @@ func (s *session) negotiateAuth() error {
 
 	if selected == nil {
 		_, _ = s.conn.Write([]byte{version5, methodNoAcceptable})
-		return errors.New("no acceptable authentication method")
+		return "", errors.New("no acceptable authentication method")
 	}
 
 	if _, err := s.conn.Write([]byte{version5, selected.Code()}); err != nil {
-		return fmt.Errorf("write method selection: %w", err)
+		return "", fmt.Errorf("write method selection: %w", err)
 	}
 
 	identity, err := selected.Authenticate(s.conn)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if identity != "" {
 		s.log.Info("authenticated", "user", identity)
 	}
-	return nil
+	return identity, nil
 }
 
 // readRequest reads VER | CMD | RSV | ATYP | DST.ADDR | DST.PORT and returns

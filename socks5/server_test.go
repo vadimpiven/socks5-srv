@@ -88,7 +88,7 @@ func TestFullSession_NoAuth_Connect(t *testing.T) {
 	t.Parallel()
 	echo := startEchoServer(t)
 	defer echo.Close()
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	conn := dialThroughProxy(t, proxyAddr, nil, echo.Addr().String())
@@ -111,7 +111,7 @@ func TestFullSession_UserPass_Connect(t *testing.T) {
 
 	proxyAddr, cancel := startProxy(t, Config{
 		Authenticators:           []Authenticator{UserPassAuth("user", "pass")},
-		AllowPrivateDestinations: true,
+		AllowPrivateDestinations: func(string) bool { return true },
 	})
 	defer cancel()
 
@@ -180,7 +180,7 @@ func TestFullSession_UnsupportedCommand(t *testing.T) {
 	// AllowPrivateDestinations: BIND targets 127.0.0.1, so private-IP filtering
 	// must be disabled to let the request reach the command-dispatch switch,
 	// which replies 0x07 (command not supported).
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
@@ -209,7 +209,7 @@ func TestFullSession_UnsupportedCommand(t *testing.T) {
 // the target port is not listening.
 func TestFullSession_ConnectionRefused(t *testing.T) {
 	t.Parallel()
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
@@ -236,7 +236,7 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Parallel()
 	echo := startEchoServer(t)
 	defer echo.Close()
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 
 	conn := dialThroughProxy(t, proxyAddr, nil, echo.Addr().String())
 
@@ -380,7 +380,7 @@ func TestConnect_DomainName(t *testing.T) {
 	echo := startEchoServer(t)
 	defer echo.Close()
 	// AllowPrivateDestinations: "localhost" resolves to 127.0.0.1 (loopback).
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	_, portStr, _ := net.SplitHostPort(echo.Addr().String())
@@ -422,7 +422,7 @@ func TestConnect_IPv6(t *testing.T) {
 		}
 	}()
 
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	// Dial through proxy to [::1]:port.
@@ -470,7 +470,7 @@ func TestConnect_BNDAddrPort(t *testing.T) {
 	t.Parallel()
 	echo := startEchoServer(t)
 	defer echo.Close()
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
@@ -563,7 +563,7 @@ func connectAndExpectBlocked(t *testing.T, proxyAddr string, atyp byte, addrByte
 }
 
 // TestDefaultConfig_BlocksPrivateConnect verifies that the default config
-// (AllowPrivateDestinations=false) blocks CONNECT to several categories of
+// (AllowPrivateDestinations=nil) blocks CONNECT to several categories of
 // private/reserved addresses across both IPv4 and IPv6.
 func TestDefaultConfig_BlocksPrivateConnect(t *testing.T) {
 	t.Parallel()
@@ -591,13 +591,13 @@ func TestDefaultConfig_BlocksPrivateConnect(t *testing.T) {
 	}
 }
 
-// TestAllowPrivateDestinations_PermitsLoopback verifies that setting
-// AllowPrivateDestinations=true allows CONNECT to loopback addresses.
+// TestAllowPrivateDestinations_PermitsLoopback verifies that an
+// AllowPrivateDestinations callback returning true allows CONNECT to loopback.
 func TestAllowPrivateDestinations_PermitsLoopback(t *testing.T) {
 	t.Parallel()
 	echo := startEchoServer(t)
 	defer echo.Close()
-	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: true})
+	proxyAddr, cancel := startProxy(t, Config{AllowPrivateDestinations: func(string) bool { return true }})
 	defer cancel()
 
 	conn := dialThroughProxy(t, proxyAddr, nil, echo.Addr().String())
@@ -622,7 +622,7 @@ func TestTrustedIPs_BypassAuth(t *testing.T) {
 	proxyAddr, cancel := startProxy(t, Config{
 		Authenticators:           []Authenticator{UserPassAuth("user", "pass")},
 		TrustedIPs:               []netip.Addr{netip.MustParseAddr("127.0.0.1")},
-		AllowPrivateDestinations: true,
+		AllowPrivateDestinations: func(string) bool { return true },
 	})
 	defer cancel()
 
@@ -887,7 +887,7 @@ func TestRelay_TCPIdleTimeout(t *testing.T) {
 	const idleTimeout = 150 * time.Millisecond
 	proxyAddr, cancel := startProxy(t, Config{
 		TCPIdleTimeout:           idleTimeout,
-		AllowPrivateDestinations: true,
+		AllowPrivateDestinations: func(string) bool { return true },
 	})
 	defer cancel()
 
@@ -928,4 +928,197 @@ func TestRelay_UDPIdleTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected UDP idle timeout to close the TCP control connection")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// RFC 1929 §2: sub-negotiation edge cases
+// ---------------------------------------------------------------------------
+
+// TestAuthSubNeg_WrongVersion verifies that an auth sub-negotiation with a
+// VER byte other than 0x01 causes the server to close the connection.
+func TestAuthSubNeg_WrongVersion(t *testing.T) {
+	t.Parallel()
+	proxyAddr, cancel := startProxy(t, Config{
+		Authenticators: []Authenticator{UserPassAuth("u", "p")},
+	})
+	defer cancel()
+
+	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	conn.Write([]byte{version5, 0x01, methodUserPass})
+	io.ReadFull(conn, make([]byte, 2))
+
+	// Send auth with wrong sub-version (0x02 instead of 0x01).
+	conn.Write([]byte{0x02, 0x01, 'u', 0x01, 'p'})
+
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection close after wrong auth sub-version (RFC 1929 §2)")
+	}
+}
+
+// TestAuthSubNeg_ZeroULEN verifies that ULEN=0 is rejected per RFC 1929 §2
+// ("UNAME: 1 to 255") with STATUS=0x01 (failure).
+func TestAuthSubNeg_ZeroULEN(t *testing.T) {
+	t.Parallel()
+	proxyAddr, cancel := startProxy(t, Config{
+		Authenticators: []Authenticator{UserPassAuth("u", "p")},
+	})
+	defer cancel()
+
+	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	conn.Write([]byte{version5, 0x01, methodUserPass})
+	io.ReadFull(conn, make([]byte, 2))
+
+	// ULEN=0: empty username.
+	conn.Write([]byte{authSubVersion, 0x00})
+
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read auth response: %v", err)
+	}
+	if resp[1] != authFailure {
+		t.Fatalf("STATUS = %#x, want %#x (failure) for ULEN=0", resp[1], authFailure)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection close after ULEN=0 (RFC 1929 §2)")
+	}
+}
+
+// TestAuthSubNeg_ZeroPLEN verifies that PLEN=0 is rejected per RFC 1929 §2
+// ("PASSWD: 1 to 255") with STATUS=0x01 (failure).
+func TestAuthSubNeg_ZeroPLEN(t *testing.T) {
+	t.Parallel()
+	proxyAddr, cancel := startProxy(t, Config{
+		Authenticators: []Authenticator{UserPassAuth("u", "p")},
+	})
+	defer cancel()
+
+	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	conn.Write([]byte{version5, 0x01, methodUserPass})
+	io.ReadFull(conn, make([]byte, 2))
+
+	// Valid username, then PLEN=0.
+	conn.Write([]byte{authSubVersion, 0x01, 'u', 0x00})
+
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(conn, resp); err != nil {
+		t.Fatalf("read auth response: %v", err)
+	}
+	if resp[1] != authFailure {
+		t.Fatalf("STATUS = %#x, want %#x (failure) for PLEN=0", resp[1], authFailure)
+	}
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected connection close after PLEN=0 (RFC 1929 §2)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-user AllowPrivateDestinations policy
+// ---------------------------------------------------------------------------
+
+// TestPerUserPrivatePolicy verifies that the AllowPrivateDestinations callback
+// receives the authenticated identity and correctly allows or denies private
+// destinations on a per-user basis.
+func TestPerUserPrivatePolicy(t *testing.T) {
+	t.Parallel()
+	echo := startEchoServer(t)
+	defer echo.Close()
+
+	proxyAddr, cancel := startProxy(t, Config{
+		Authenticators: []Authenticator{
+			UserPassAuthMulti(map[string]string{
+				"allowed": "pass",
+				"denied":  "pass",
+			}),
+		},
+		AllowPrivateDestinations: func(identity string) bool {
+			return identity == "allowed"
+		},
+	})
+	defer cancel()
+
+	// User "allowed" should reach the echo server on loopback.
+	conn := dialThroughProxy(t, proxyAddr,
+		&proxy.Auth{User: "allowed", Password: "pass"},
+		echo.Addr().String())
+
+	conn.Write([]byte("private-ok"))
+	buf := make([]byte, 64)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(buf[:n]) != "private-ok" {
+		t.Fatalf("got %q, want %q", buf[:n], "private-ok")
+	}
+
+	// User "denied" should be blocked with reply 0x02 (not allowed).
+	raw, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	raw.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// Greeting: offer UserPass.
+	raw.Write([]byte{version5, 0x01, methodUserPass})
+	io.ReadFull(raw, make([]byte, 2))
+
+	// Authenticate as "denied".
+	auth := []byte{authSubVersion, 0x06}
+	auth = append(auth, "denied"...)
+	auth = append(auth, 0x04)
+	auth = append(auth, "pass"...)
+	raw.Write(auth)
+	io.ReadFull(raw, make([]byte, 2)) // auth response
+
+	// CONNECT to loopback (private).
+	echoTCP := echo.Addr().(*net.TCPAddr)
+	req := append([]byte{version5, byte(CommandConnect), 0x00, addrTypeIPv4}, echoTCP.IP.To4()...)
+	req = binary.BigEndian.AppendUint16(req, uint16(echoTCP.Port))
+	raw.Write(req)
+
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(raw, reply); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+	if reply[1] != replyNotAllowed {
+		t.Fatalf("REP = %#x, want %#x (not allowed) for denied user", reply[1], replyNotAllowed)
+	}
+}
+
+// TestPerUserPrivatePolicy_NoAuth verifies that when AllowPrivateDestinations
+// is non-nil, NoAuth sessions pass identity="" to the callback.
+func TestPerUserPrivatePolicy_NoAuth(t *testing.T) {
+	t.Parallel()
+
+	// Callback denies empty identity — anonymous users cannot reach private.
+	proxyAddr, cancel := startProxy(t, Config{
+		AllowPrivateDestinations: func(identity string) bool {
+			return identity != ""
+		},
+	})
+	defer cancel()
+
+	connectAndExpectBlocked(t, proxyAddr, addrTypeIPv4, []byte{127, 0, 0, 1}, 80)
 }
