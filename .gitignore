@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0 OR MIT
+
+# Compiled binary (module name matches repository root)
+socks_proxy
+socks_proxy.exe
+
+# Test binaries built with `go test -c`
+*.test
+
+# Test artifacts and coverage profiles
+*.out
+coverage.*
+*.coverprofile
+
+# macOS metadata
+.DS_Store
