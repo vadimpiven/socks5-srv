@@ -52,6 +52,7 @@ package socks5
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -66,6 +67,7 @@ const (
 	defaultDialTimeout      = 30 * time.Second
 	defaultTCPIdleTimeout   = 5 * time.Minute
 	defaultUDPIdleTimeout   = 5 * time.Minute
+	defaultDNSTimeout       = 5 * time.Second
 
 	// gracefulDrainTime is the maximum time spent draining inbound data after
 	// sending a failure reply. Not user-configurable: RFC 1928 §6 requires
@@ -144,6 +146,10 @@ type Config struct {
 	// UDPIdleTimeout tears down UDP associations idle for this long.
 	// Zero means 5 minutes.
 	UDPIdleTimeout time.Duration
+
+	// DNSTimeout limits each DNS lookup performed by the UDP ASSOCIATE relay
+	// for DOMAINNAME destinations. Zero means 5 seconds.
+	DNSTimeout time.Duration
 }
 
 // Server is a ready-to-run SOCKS5 proxy. Create one with [NewServer], then
@@ -170,6 +176,7 @@ type serverTimeouts struct {
 	dial      time.Duration
 	tcpIdle   time.Duration
 	udpIdle   time.Duration
+	dns       time.Duration
 }
 
 // NewServer creates a Server from cfg, validates the configuration, and fills
@@ -209,6 +216,7 @@ func NewServer(cfg Config) (*Server, error) {
 		dial:      cfg.DialTimeout,
 		tcpIdle:   cfg.TCPIdleTimeout,
 		udpIdle:   cfg.UDPIdleTimeout,
+		dns:       cfg.DNSTimeout,
 	}
 	if to.handshake == 0 {
 		to.handshake = defaultHandshakeTimeout
@@ -221,6 +229,9 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	if to.udpIdle == 0 {
 		to.udpIdle = defaultUDPIdleTimeout
+	}
+	if to.dns == 0 {
+		to.dns = defaultDNSTimeout
 	}
 
 	// Validate every UserPassAuthenticator upfront to avoid a nil-dereference
@@ -293,6 +304,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 				wg.Wait()
 				return nil
 			default:
+				// net.ErrClosed means the listener itself was closed by
+				// external code (not via ctx); treat it as a permanent stop.
+				if errors.Is(err, net.ErrClosed) {
+					wg.Wait()
+					return err
+				}
 				s.cfg.Logger.Warn("accept failed", "err", err)
 				continue
 			}

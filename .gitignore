@@ -1,8 +1,6 @@
-# SPDX-License-Identifier: Apache-2.0 OR MIT
-
-# Compiled binary (module name matches repository root)
-socks_proxy
-socks_proxy.exe
+# Compiled binary
+socks5-srv
+socks5-srv.exe
 
 # Test binaries built with `go test -c`
 *.test

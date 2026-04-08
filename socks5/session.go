@@ -221,8 +221,14 @@ func (s *session) handleConnect(dest AddrSpec) {
 	defer remote.Close()
 
 	// Report the actual bound address to the client (RFC 1928 §6).
-	ap := remote.LocalAddr().(*net.TCPAddr).AddrPort()
-	bound := AddrSpec{IP: ap.Addr().Unmap(), Port: ap.Port()}
+	// Use a safe assertion: a custom DialFunc may return a non-TCP conn
+	// (e.g. a TLS or unix-socket wrapper); fall back to the zero AddrSpec
+	// (0.0.0.0:0) rather than panicking.
+	var bound AddrSpec
+	if tcp, ok := remote.LocalAddr().(*net.TCPAddr); ok {
+		ap := tcp.AddrPort()
+		bound = AddrSpec{IP: ap.Addr().Unmap(), Port: ap.Port()}
+	}
 	if err := writeReply(s.conn, replySuccess, bound); err != nil {
 		s.log.Warn("write success reply", "err", err)
 		return

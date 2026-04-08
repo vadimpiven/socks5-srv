@@ -336,6 +336,52 @@ func TestUDPAssociate_DomainDestination(t *testing.T) {
 	}
 }
 
+// TestUDPRelay_DropsDatagramFromWrongSourceIP verifies RFC 1928 §7:
+// "The UDP relay server MUST … drop any datagrams arriving from any source IP
+// address other than the one recorded for the particular association."
+//
+// runUDPRelay is exercised directly with a clientIP (10.0.0.1) that does not
+// match the actual sender (127.0.0.1). In Phase 1, before any client datagram
+// is accepted, every inbound datagram whose source IP ≠ clientIP must be
+// silently dropped with no reply.
+func TestUDPRelay_DropsDatagramFromWrongSourceIP(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	relay, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relay.Close()
+	relayAddr := relay.LocalAddr().(*net.UDPAddr)
+
+	sender, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	// The relay is told to expect a client from 10.0.0.1; the actual sender is
+	// 127.0.0.1, so every datagram must be silently dropped in Phase 1.
+	wrongClientIP := netip.MustParseAddr("10.0.0.1")
+	go runUDPRelay(ctx, relay, wrongClientIP, DefaultResolver{}, discardLogger(),
+		time.Second, 5*time.Second)
+
+	// Send a well-formed SOCKS5 UDP request datagram from the "wrong" source IP.
+	datagram := []byte{0x00, 0x00, 0x00, addrTypeIPv4, 127, 0, 0, 1, 0x00, 0x50, 'x'}
+	if _, err := sender.WriteTo(datagram, relayAddr); err != nil {
+		t.Fatal(err)
+	}
+
+	// No response must arrive: the relay drops the datagram because
+	// 127.0.0.1 ≠ 10.0.0.1 (clientUDPAddr never set → remote-path → drop).
+	sender.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	n, _, err := sender.ReadFrom(make([]byte, 64))
+	if err == nil {
+		t.Fatalf("expected datagram to be dropped (wrong source IP), got %d bytes back", n)
+	}
+}
+
 // TestUDPAssociate_AssociationEndsWithTCP verifies RFC 1928 §7: the UDP
 // association must terminate when the TCP control connection closes.
 func TestUDPAssociate_AssociationEndsWithTCP(t *testing.T) {

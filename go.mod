@@ -1,6 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0 OR MIT
-
-module socks_proxy
+module github.com/vadimpiven/socks5-srv
 
 go 1.26
 

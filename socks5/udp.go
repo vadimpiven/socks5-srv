@@ -108,7 +108,7 @@ func (s *session) handleUDPAssociate() {
 		pc.Close()
 	}()
 
-	runUDPRelay(ctx, pc, s.ap.Addr(), s.srv.resolver, s.log, s.srv.timeouts.udpIdle)
+	runUDPRelay(ctx, pc, s.ap.Addr(), s.srv.resolver, s.log, s.srv.timeouts.udpIdle, s.srv.timeouts.dns)
 	s.log.Info("UDP association ended", "relay_port", relayPort)
 }
 
@@ -127,6 +127,7 @@ func runUDPRelay(
 	resolver Resolver,
 	log *slog.Logger,
 	idleTimeout time.Duration,
+	dnsTimeout time.Duration,
 ) {
 	buf := make([]byte, udpBufSize)
 	wbuf := make([]byte, udpResponseBufSize) // reused for every remote→client response
@@ -174,7 +175,7 @@ func runUDPRelay(
 
 			var dstAP netip.AddrPort
 			if dest.Domain != "" {
-				resolveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				resolveCtx, cancel := context.WithTimeout(ctx, dnsTimeout)
 				ip, err := resolver.Resolve(resolveCtx, dest.Domain)
 				cancel()
 				if err != nil {

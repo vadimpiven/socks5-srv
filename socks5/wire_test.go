@@ -176,8 +176,11 @@ func TestParseAddrFromBytes_Truncated(t *testing.T) {
 
 // TestWriteReply_RSVIsZero verifies RFC 1928 §6: RSV must be 0x00 in every reply.
 func TestWriteReply_RSVIsZero(t *testing.T) {
-	for _, code := range []byte{replySuccess, replyGeneralFailure, replyNotAllowed,
-		replyConnRefused, replyCmdNotSupported, replyAddrNotSupported} {
+	for _, code := range []byte{
+		replySuccess, replyGeneralFailure, replyNotAllowed,
+		replyNetUnreachable, replyHostUnreachable, replyConnRefused,
+		replyCmdNotSupported, replyAddrNotSupported,
+	} {
 		var buf bytes.Buffer
 		writeReply(&buf, code, AddrSpec{})
 		if got := buf.Bytes()[2]; got != 0x00 {

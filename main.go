@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-// Command socks5-proxy starts a lightweight SOCKS5 proxy server.
+// Command socks5-srv starts a lightweight SOCKS5 proxy server.
 //
 // It supports TCP CONNECT and UDP ASSOCIATE through IPv4 and IPv6 networks,
 // with optional username/password authentication per RFC 1928 and RFC 1929.
 //
 // Usage:
 //
-//	socks5-proxy [flags]
+//	socks5-srv [flags]
 //	  -addr      :1080         listen address (host:port)
 //	  -user      name          require username/password authentication
 //	  -pass      secret        password (must pair with -user)
@@ -28,17 +28,17 @@ import (
 	"strings"
 	"syscall"
 
-	"socks_proxy/socks5"
+	"github.com/vadimpiven/socks5-srv/socks5"
 )
 
 func main() {
-	addr     := flag.String("addr",      ":1080", "listen address (host:port)")
-	user     := flag.String("user",      "",      "username for client authentication")
-	pass     := flag.String("pass",      "",      "password for client authentication")
-	bind     := flag.String("bind",      "",      "local IP for outbound connections")
-	allow    := flag.String("allow",     "",      "comma-separated IPs allowed without authentication")
-	authOnce := flag.Bool  ("auth-once", false,   "whitelist a client IP after its first successful auth")
-	quiet    := flag.Bool  ("quiet",     false,   "suppress informational log output")
+	addr := flag.String("addr", ":1080", "listen address (host:port)")
+	user := flag.String("user", "", "username for client authentication")
+	pass := flag.String("pass", "", "password for client authentication")
+	bind := flag.String("bind", "", "local IP for outbound connections")
+	allow := flag.String("allow", "", "comma-separated IPs allowed without authentication")
+	authOnce := flag.Bool("auth-once", false, "whitelist a client IP after its first successful auth")
+	quiet := flag.Bool("quiet", false, "suppress informational log output")
 	flag.Parse()
 
 	if (*user == "") != (*pass == "") {
